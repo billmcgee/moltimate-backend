@@ -36,7 +36,7 @@ import java.util.stream.Collectors;
  */
 @Service
 @Slf4j
-@CacheConfig(cacheNames={"Alignments"})
+@CacheConfig(cacheNames = {"Alignments"})
 public class AlignmentService {
 
     @Autowired
@@ -58,13 +58,15 @@ public class AlignmentService {
         double precision = alignmentRequest.getPrecisionFactor();
 
         HashMap<String, List<Alignment>> results = new HashMap<>();
-        pdbResponse.getFoundPdbIds().forEach(pdbId -> results.put(pdbId, new ArrayList<>()));
+        pdbResponse.getFoundPdbIds()
+                .forEach(pdbId -> results.put(pdbId, new ArrayList<>()));
 
         int pageNumber = 0;
         Page<Motif> motifs = motifService.queryByEcNumber(motifEcNumberFilter, pageNumber);
 
         log.info(String.format("Aligning active sites of %d PDB entries with %d motifs & %d custom motifs.",
-                sourceStructures.size(), motifs.getTotalElements(), customMotifs.size()));
+                               sourceStructures.size(), motifs.getTotalElements(), customMotifs.size()
+        ));
 
         // Align structures with motifs from the database
         while (motifs.hasContent()) {
@@ -94,8 +96,12 @@ public class AlignmentService {
         }
 
         log.info(String.format("Found %d results", resultsCount));
-        if (pdbResponse.getFailedPdbIds().size() > 0) {
-            log.error(String.format("Could not find PDB structures for the following ids: %s", pdbResponse.getFailedPdbIds()));
+        if (pdbResponse.getFailedPdbIds()
+                .size() > 0) {
+            log.error(String.format(
+                    "Could not find PDB structures for the following ids: %s",
+                    pdbResponse.getFailedPdbIds()
+            ));
         }
         return new ActiveSiteAlignmentResponse(results, pdbResponse.getFailedPdbIds());
     }
@@ -159,7 +165,8 @@ public class AlignmentService {
         }
 
         List<Group> alignedResidueListSorted = new ArrayList<>(alignedResidueList);
-        alignedResidueListSorted.sort(Comparator.comparingInt(o -> o.getResidueNumber().getSeqNum()));
+        alignedResidueListSorted.sort(Comparator.comparingInt(o -> o.getResidueNumber()
+                .getSeqNum()));
         String alignmentString = AlignmentUtils.groupListToResString(alignedResidueListSorted);
         String motifResString = AlignmentUtils.residueListToResString(motif.getActiveSiteResidues());
 
@@ -172,8 +179,8 @@ public class AlignmentService {
             alignment.setMinDistance(distance);
             alignment.setMaxDistance(distance);
             alignment.setAlignedResidues(alignedResidueList.stream()
-                    .map(Residue::fromGroup)
-                    .collect(Collectors.toList()));
+                                                 .map(Residue::fromGroup)
+                                                 .collect(Collectors.toList()));
             alignment.setRmsd(rmsd(motifStructure, motif.getActiveSiteResidues(), alignedResidueList));
             alignment.setEcNumber(motif.getEcNumber());
             return alignment;
@@ -227,6 +234,33 @@ public class AlignmentService {
     }
 
     /**
+     * Calculate the lazy (only CB atoms) RMSD (root mean squared distance) between atoms in an alignment.
+     * Tl;dr: average atom distance of an alignment. The lower it is, the better the alignment.
+     * <p>
+     * We do this by applying an SVD superposition and finding the RMSD of that
+     *
+     * @param motifStructure:     Structure object for the motif
+     * @param activeSiteResidues: List of active site residues
+     * @param alignedResidues:    list of residues aligned with active site
+     * @return a floating point value representing the RMSD of the superposition alignment of the active site of
+     * the motif and the aligned residues.
+     */
+    private double lazyRmsd(Structure motifStructure, List<Residue> activeSiteResidues, List<Group> alignedResidues) {
+        List<Group> activeSite = new ArrayList<>();
+        for (Residue residue : activeSiteResidues) {
+            activeSite.add(StructureUtils.getResidue(motifStructure, residue.getResidueName(), residue.getResidueId()));
+        }
+
+        Point3d[] activeSitePoints = lazyAtomListFromResidueSet(activeSite);
+        Point3d[] alignedResiduePoints = lazyAtomListFromResidueSet(alignedResidues);
+        SuperPositionSVD superPositionSVD = new SuperPositionSVD(false);
+        if (activeSitePoints.length != alignedResiduePoints.length) {
+            return -1;
+        }
+        return superPositionSVD.getRmsd(activeSitePoints, alignedResiduePoints);
+    }
+
+    /**
      * Get atoms as 3d points from a set of biojava groups (residues)
      *
      * @param residues: residues to get atoms from
@@ -236,6 +270,24 @@ public class AlignmentService {
         List<Atom> atoms = new ArrayList<>();
         for (Group residue : residues) {
             atoms.addAll(getAtomsFromGroup(residue));
+        }
+        List<Point3d> points = atoms.stream()
+                .map(Atom::getCoordsAsPoint3d)
+                .collect(Collectors.toList());
+        Point3d[] point3ds = new Point3d[points.size()];
+        return points.toArray(point3ds);
+    }
+
+    /**
+     * Get lazy atoms (only CB) as 3d points from a set of biojava groups (residues)
+     *
+     * @param residues: residues to get atoms from
+     * @return the atoms in the residues presented as an array of 3d points representing their locations
+     */
+    private Point3d[] lazyAtomListFromResidueSet(List<Group> residues) {
+        List<Atom> atoms = new ArrayList<>();
+        for (Group residue : residues) {
+            atoms.addAll(getCBAtomsFromGroup(residue));
         }
         List<Point3d> points = atoms.stream()
                 .map(Atom::getCoordsAsPoint3d)
@@ -255,19 +307,34 @@ public class AlignmentService {
         List<Atom> atoms = group.getAtoms();
         atoms = atoms.stream()
                 .filter(atom ->
-                        //Remove hydrogen atoms
-                        !atom.getName()
-                                .contains("H") &&
-                                //These ones also get in the way
+                                //Remove hydrogen atoms
                                 !atom.getName()
-                                        .startsWith("D") &&
-                                //Remove backbone atoms
-                                !atom.getName()
-                                        .equals("N") &&
-                                !atom.getName()
-                                        .equals("C") &&
-                                !atom.getName()
-                                        .equals("O"))
+                                        .contains("H") &&
+                                        //These ones also get in the way
+                                        !atom.getName()
+                                                .startsWith("D") &&
+                                        //Remove backbone atoms
+                                        !atom.getName()
+                                                .equals("N") &&
+                                        !atom.getName()
+                                                .equals("C") &&
+                                        !atom.getName()
+                                                .equals("O"))
+                .collect(Collectors.toList());
+        return atoms;
+    }
+
+    /**
+     * Get all CB atoms from a group (residue).
+     *
+     * @param group: biojava group to get atoms from
+     * @return filtered list of atoms from the group
+     */
+    private List<Atom> getCBAtomsFromGroup(Group group) {
+        List<Atom> atoms = group.getAtoms();
+        atoms = atoms.stream()
+                .filter(atom -> !atom.getName()
+                        .equals("CB"))
                 .collect(Collectors.toList());
         return atoms;
     }
@@ -309,16 +376,24 @@ public class AlignmentService {
         double min_rmsd = Double.MAX_VALUE;
         Map<Residue, Group> best_match = new HashMap<>();
         for (Map<Residue, Group> permutation : permutations) {
+            if (permutationIsExactMatch(permutation, motif)) {
+                return permutation;
+            }
+        }
+
+        for (Map<Residue, Group> permutation : permutations) {
             List<Group> alignmentSeq = new ArrayList<>(permutation.values());
-            alignmentSeq.sort(Comparator.comparingInt(o -> o.getResidueNumber().getSeqNum()));
+            alignmentSeq.sort(Comparator.comparingInt(o -> o.getResidueNumber()
+                    .getSeqNum()));
             String alignmentString = AlignmentUtils.groupListToResString(alignmentSeq);
             String motifResString = AlignmentUtils.residueListToResString(motif.getActiveSiteResidues());
 
             int distance = AlignmentUtils.levensteinDistance(alignmentString, motifResString);
 
-            if (acceptableDistance(motif.getActiveSiteResidues().size(), distance)) {
+            if (acceptableDistance(motif.getActiveSiteResidues()
+                                           .size(), distance)) {
 
-                double rmsd = rmsd(motifStructure, motif.getActiveSiteResidues(), alignmentSeq);
+                double rmsd = lazyRmsd(motifStructure, motif.getActiveSiteResidues(), alignmentSeq);
                 if (rmsd != -1 && rmsd < min_rmsd) {
                     min_rmsd = rmsd;
                     best_match = permutation;
@@ -327,6 +402,31 @@ public class AlignmentService {
         }
 
         return best_match;
+    }
+
+    private boolean permutationIsExactMatch(Map<Residue, Group> permutation, Motif motif) {
+        Map<String, Boolean> foundResidueMap = new HashMap<>();
+        for (Residue residue : motif.getActiveSiteResidues()) {
+            String key = residue.getResidueName() + residue.getResidueId();
+            foundResidueMap.put(key, false);
+        }
+        for (Residue key : permutation.keySet()) {
+            Group resMatch = permutation.get(key);
+            String id = resMatch.getChemComp()
+                    .getThree_letter_code() + resMatch.getResidueNumber()
+                    .toString();
+            if (!foundResidueMap.containsKey(id)) {
+                return false;
+            } else {
+                foundResidueMap.put(id, true);
+            }
+        }
+
+        boolean success = true;
+        for (Boolean value : foundResidueMap.values()) {
+            success = success && value;
+        }
+        return success;
     }
 
     /**

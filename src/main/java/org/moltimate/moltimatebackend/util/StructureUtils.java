@@ -181,8 +181,8 @@ public class StructureUtils {
         atom1List.forEach(atom1 ->
                 atom2List.forEach(atom2 -> {
                     double _rmsd = rmsd(atom1, atom2);
-                    double _errorMargin = l2Norm(new double[]{distanceErrorMargin, distanceErrorMargin, distanceErrorMargin});
-                    double _precisionMod = l2Norm(new double[]{precision, precision, precision});
+                    double _errorMargin = 4;//l2Norm(new double[]{distanceErrorMargin, distanceErrorMargin, distanceErrorMargin});
+                    double _precisionMod = precision;//l2Norm(new double[]{precision, precision, precision});
                     if (atom1.getGroup() != atom2.getGroup()
                             && (_rmsd < distance * precision)
                             && (Math.abs(_rmsd - (distance * precision)) < (_errorMargin * _precisionMod))
